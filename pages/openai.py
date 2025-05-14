@@ -1,44 +1,43 @@
 import streamlit as st
 import openai
 
-st.set_page_config(page_title="GPT-4.1-mini Q&A", page_icon="🤖")
-st.title("🤖 GPT-4.1-mini 질문 응답기")
+st.set_page_config(page_title="AI Q&A Helper", page_icon="🧠")
+st.header("🧠 AI 질문 도우미")
+st.info("GPT-4.1-mini를 활용해 궁금한 점을 물어보세요.")
 
-# API Key 입력받고 session_state에 저장
-if 'api_key' not in st.session_state:
-    st.session_state['api_key'] = ''
+if 'user_api_key' not in st.session_state:
+    st.session_state['user_api_key'] = ''
 
-st.session_state['api_key'] = st.text_input(
-    label="OpenAI API Key를 입력하세요",
-    value=st.session_state['api_key'],
+st.session_state['user_api_key'] = st.text_input(
+    label="🔑 OpenAI API Key를 입력해주세요",
+    value=st.session_state['user_api_key'],
     type="password"
 )
 
-# API Key 설정
-if st.session_state['api_key']:
-    openai.api_key = st.session_state['api_key']
+if st.session_state['user_api_key']:
+    openai.api_key = st.session_state['user_api_key']
 
-    # 사용자 질문 입력
-    question = st.text_input("질문을 입력하세요:")
+    query = st.text_input("💬 질문을 입력하세요")
 
-    @st.cache_data(show_spinner="모델이 응답 중입니다...", experimental_allow_widgets=True)
-    def get_gpt_response(prompt, api_key):
-        client = openai.OpenAI(api_key=api_key)
-        response = client.chat.completions.create(
-            model="gpt-4-1106-preview",  # gpt-4.1-mini 대체 모델 이름
+    @st.cache_data(show_spinner="AI가 답변을 준비 중입니다...", experimental_allow_widgets=True)
+    def fetch_ai_response(user_prompt, user_key):
+        oai_client = openai.OpenAI(api_key=user_key)
+        result = oai_client.chat.completions.create(
+            model="gpt-4-1106-preview",
             messages=[
-                {"role": "system", "content": "당신은 도움이 되는 AI 어시스턴트입니다."},
-                {"role": "user", "content": prompt}
+                {"role": "system", "content": "당신은 친절하고 유용한 AI 조수입니다."},
+                {"role": "user", "content": user_prompt}
             ]
         )
-        return response.choices[0].message.content.strip()
+        return result.choices[0].message.content.strip()
 
-    if question:
+    if query:
         try:
-            response_text = get_gpt_response(question, st.session_state['api_key'])
-            st.markdown("### 💡 GPT-4.1-mini의 답변")
-            st.write(response_text)
-        except Exception as e:
-            st.error(f"오류 발생: {e}")
+            ai_reply = fetch_ai_response(query, st.session_state['user_api_key'])
+            st.subheader("📢 AI 응답")
+            st.write(ai_reply)
+        except Exception as err:
+            st.error(f"❗ 오류가 발생했습니다: {err}")
 else:
-    st.warning("먼저 OpenAI API Key를 입력하세요.")
+    st.warning("🔐 먼저 OpenAI API Key를 입력해야 합니다.")
+
