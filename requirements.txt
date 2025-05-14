@@ -1,0 +1,9 @@
+streamlit>=1.18
+openai>=1.0.0
+streamlit
+openai
+PyPDF2
+faiss-cpu
+langchain
+tiktoken
+langchain-openai
