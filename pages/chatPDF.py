@@ -1,56 +1,94 @@
 import streamlit as st
-from PyPDF2 import PdfReader
-from langchain.text_splitter import RecursiveCharacterTextSplitter
-from langchain_openai import OpenAIEmbeddings, ChatOpenAI
-from langchain_community.vectorstores import FAISS    # ✅ 수정 완료
+import openai
+import tempfile
 import os
+import time
 
-# 환경변수로 API Key 관리
-os.environ["OPENAI_API_KEY"] = st.secrets["OPENAI_API_KEY"]
+st.set_page_config(page_title="ChatPDF Assistant", page_icon="📄")
+st.title("📄 ChatPDF Assistant")
+st.markdown("PDF 파일을 업로드하고 내용을 기반으로 자유롭게 대화하세요.")
 
-st.set_page_config(page_title="ChatPDF", page_icon="📄")
-st.title("📄 ChatPDF: PDF와 대화하기 (GitHub 버전)")
+api_key = st.text_input("🔑 OpenAI API Key를 입력하세요", type="password")
 
-if "vectorstore" not in st.session_state:
-    st.session_state.vectorstore = None
+if api_key:
+    client = openai.Client(api_key=api_key)
 
-uploaded_file = st.file_uploader("PDF 파일을 업로드하세요", type=["pdf"])
+    if 'file_id' not in st.session_state:
+        st.session_state.file_id = None
+    if 'assistant_id' not in st.session_state:
+        st.session_state.assistant_id = None
+    if 'thread_id' not in st.session_state:
+        st.session_state.thread_id = None
 
-if uploaded_file is not None:
-    pdf_reader = PdfReader(uploaded_file)
-    text = ""
-    for page in pdf_reader.pages:
-        text += page.extract_text() + "\n"
+    uploaded_file = st.file_uploader("📂 PDF 파일을 업로드하세요", type=["pdf"])
 
-    text_splitter = RecursiveCharacterTextSplitter(chunk_size=1000, chunk_overlap=200)
-    chunks = text_splitter.split_text(text)
+    def upload_pdf(file):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
+            tmp_file.write(file.read())
+            tmp_file_path = tmp_file.name
 
-    embeddings = OpenAIEmbeddings()
-    vectorstore = FAISS.from_texts(chunks, embeddings)
+        response = client.files.create(
+            file=open(tmp_file_path, "rb"),
+            purpose="assistants"
+        )
+        os.remove(tmp_file_path)
+        return response.id
 
-    st.session_state.vectorstore = vectorstore
-    st.success(f"✅ '{uploaded_file.name}' 파일을 분석했습니다. 질문을 입력하세요.")
+    if st.button("🗑️ 초기화"):
+        st.session_state.file_id = None
+        st.session_state.assistant_id = None
+        st.session_state.thread_id = None
+        st.success("초기화 완료!")
 
-if st.button("Clear"):
-    st.session_state.vectorstore = None
-    st.success("벡터 스토어를 초기화했습니다.")
+    if uploaded_file and not st.session_state.file_id:
+        st.info("파일 업로드 중...")
+        st.session_state.file_id = upload_pdf(uploaded_file)
+        st.success("파일 업로드 성공!")
 
-if st.session_state.vectorstore:
-    question = st.text_input("질문을 입력하세요:", placeholder="예: 이 논문의 핵심 기여는?")
-    if question:
-        docs = st.session_state.vectorstore.similarity_search(question, k=3)
-        context = "\n\n".join([doc.page_content for doc in docs])
+        # ✅ Assistant 생성
+        assistant = client.beta.assistants.create(
+            name="ChatPDF Assistant",
+            instructions="업로드된 PDF 파일을 기반으로 질문에 답하세요.",
+            model="gpt-4o",
+            tools=[{"type": "file_search"}]
+        )
+        st.session_state.assistant_id = assistant.id
 
-        llm = ChatOpenAI(temperature=0)
-        prompt = f"""당신은 PDF 문서의 도우미입니다. 아래 문서를 참고하여 질문에 답하세요.
+        # ✅ Thread 생성
+        thread = client.beta.threads.create()
+        st.session_state.thread_id = thread.id
 
-문서 내용:
-{context}
+    if st.session_state.file_id and st.session_state.assistant_id and st.session_state.thread_id:
+        user_input = st.text_input("💬 질문:", placeholder="문서에 대해 궁금한 점을 입력하세요.")
 
-질문:
-{question}
+        if user_input:
+            client.beta.threads.messages.create(
+                thread_id=st.session_state.thread_id,
+                role="user",
+                content=user_input,
+                attachments=[{"file_id": st.session_state.file_id, "tools": [{"type": "file_search"}]}]
+            )
 
-답변:"""
+            run = client.beta.threads.runs.create(
+                thread_id=st.session_state.thread_id,
+                assistant_id=st.session_state.assistant_id
+            )
 
-        response = llm.invoke(prompt)
-        st.write("💡 답변:", response.content)
+            with st.spinner("답변 생성 중..."):
+                while run.status not in ["completed", "failed", "cancelled"]:
+                    time.sleep(1)
+                    run = client.beta.threads.runs.retrieve(
+                        thread_id=st.session_state.thread_id,
+                        run_id=run.id
+                    )
+
+                if run.status == "completed":
+                    messages = client.beta.threads.messages.list(
+                        thread_id=st.session_state.thread_id
+                    )
+                    answer = messages.data[0].content[0].text.value
+                    st.markdown(f"🤖 **답변:** {answer}")
+                else:
+                    st.error(f"실패: {run.status}")
+else:
+    st.warning("👆 먼저 OpenAI API Key를 입력하세요.")
