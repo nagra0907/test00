@@ -4,91 +4,88 @@ import tempfile
 import os
 import time
 
-st.set_page_config(page_title="ChatPDF Assistant", page_icon="📄")
-st.title("📄 ChatPDF Assistant")
-st.markdown("PDF 파일을 업로드하고 내용을 기반으로 자유롭게 대화하세요.")
+st.set_page_config(page_title="PDF 대화 도우미", page_icon="📑")
+st.header("📑 PDF Assistant")
+st.info("PDF 파일을 올리고 파일 내용을 바탕으로 질문해 보세요.")
 
-api_key = st.text_input("🔑 OpenAI API Key를 입력하세요", type="password")
+api_token = st.text_input("🔐 OpenAI API Key를 입력하세요", type="password")
 
-if api_key:
-    client = openai.Client(api_key=api_key)
+if api_token:
+    oai_client = openai.Client(api_key=api_token)
 
-    if 'file_id' not in st.session_state:
-        st.session_state.file_id = None
-    if 'assistant_id' not in st.session_state:
-        st.session_state.assistant_id = None
-    if 'thread_id' not in st.session_state:
-        st.session_state.thread_id = None
+    session = st.session_state
+    session.setdefault("pdf_file_id", None)
+    session.setdefault("assistant_ref", None)
+    session.setdefault("thread_ref", None)
 
-    uploaded_file = st.file_uploader("📂 PDF 파일을 업로드하세요", type=["pdf"])
+    uploaded_pdf = st.file_uploader("📥 PDF 파일을 선택하세요", type=["pdf"])
 
-    def upload_pdf(file):
-        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp_file:
-            tmp_file.write(file.read())
-            tmp_file_path = tmp_file.name
+    def store_pdf(file_obj):
+        with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as temp_pdf:
+            temp_pdf.write(file_obj.read())
+            temp_path = temp_pdf.name
 
-        response = client.files.create(
-            file=open(tmp_file_path, "rb"),
+        file_upload = oai_client.files.create(
+            file=open(temp_path, "rb"),
             purpose="assistants"
         )
-        os.remove(tmp_file_path)
-        return response.id
+        os.remove(temp_path)
+        return file_upload.id
 
-    if st.button("🗑️ 초기화"):
-        st.session_state.file_id = None
-        st.session_state.assistant_id = None
-        st.session_state.thread_id = None
-        st.success("초기화 완료!")
+    if st.button("🔄 세션 초기화"):
+        session.pdf_file_id = None
+        session.assistant_ref = None
+        session.thread_ref = None
+        st.success("세션이 초기화되었습니다.")
 
-    if uploaded_file and not st.session_state.file_id:
-        st.info("파일 업로드 중...")
-        st.session_state.file_id = upload_pdf(uploaded_file)
-        st.success("파일 업로드 성공!")
+    if uploaded_pdf and not session.pdf_file_id:
+        st.info("파일을 서버로 전송 중...")
+        session.pdf_file_id = store_pdf(uploaded_pdf)
+        st.success("파일 업로드 성공 ✅")
 
-        # ✅ Assistant 생성
-        assistant = client.beta.assistants.create(
-            name="ChatPDF Assistant",
-            instructions="업로드된 PDF 파일을 기반으로 질문에 답하세요.",
+        assistant_cfg = oai_client.beta.assistants.create(
+            name="PDF Assistant",
+            instructions="첨부된 PDF 파일을 바탕으로 사용자 질문에 응답하세요.",
             model="gpt-4o",
             tools=[{"type": "file_search"}]
         )
-        st.session_state.assistant_id = assistant.id
+        session.assistant_ref = assistant_cfg.id
 
-        # ✅ Thread 생성
-        thread = client.beta.threads.create()
-        st.session_state.thread_id = thread.id
+        thread_cfg = oai_client.beta.threads.create()
+        session.thread_ref = thread_cfg.id
 
-    if st.session_state.file_id and st.session_state.assistant_id and st.session_state.thread_id:
-        user_input = st.text_input("💬 질문:", placeholder="문서에 대해 궁금한 점을 입력하세요.")
+    if all([session.pdf_file_id, session.assistant_ref, session.thread_ref]):
+        query = st.text_input("💬 문서와 관련된 질문을 입력하세요")
 
-        if user_input:
-            client.beta.threads.messages.create(
-                thread_id=st.session_state.thread_id,
+        if query:
+            oai_client.beta.threads.messages.create(
+                thread_id=session.thread_ref,
                 role="user",
-                content=user_input,
-                attachments=[{"file_id": st.session_state.file_id, "tools": [{"type": "file_search"}]}]
+                content=query,
+                attachments=[{"file_id": session.pdf_file_id, "tools": [{"type": "file_search"}]}]
             )
 
-            run = client.beta.threads.runs.create(
-                thread_id=st.session_state.thread_id,
-                assistant_id=st.session_state.assistant_id
+            task = oai_client.beta.threads.runs.create(
+                thread_id=session.thread_ref,
+                assistant_id=session.assistant_ref
             )
 
-            with st.spinner("답변 생성 중..."):
-                while run.status not in ["completed", "failed", "cancelled"]:
+            with st.spinner("AI가 답변을 준비 중입니다..."):
+                while task.status not in ["completed", "failed", "cancelled"]:
                     time.sleep(1)
-                    run = client.beta.threads.runs.retrieve(
-                        thread_id=st.session_state.thread_id,
-                        run_id=run.id
+                    task = oai_client.beta.threads.runs.retrieve(
+                        thread_id=session.thread_ref,
+                        run_id=task.id
                     )
 
-                if run.status == "completed":
-                    messages = client.beta.threads.messages.list(
-                        thread_id=st.session_state.thread_id
+                if task.status == "completed":
+                    msgs = oai_client.beta.threads.messages.list(
+                        thread_id=session.thread_ref
                     )
-                    answer = messages.data[0].content[0].text.value
-                    st.markdown(f"🤖 **답변:** {answer}")
+                    reply = msgs.data[0].content[0].text.value
+                    st.success("🤖 AI 답변:")
+                    st.markdown(reply)
                 else:
-                    st.error(f"실패: {run.status}")
+                    st.error(f"❌ 작업 실패: {task.status}")
 else:
-    st.warning("👆 먼저 OpenAI API Key를 입력하세요.")
+    st.warning("🔑 먼저 OpenAI API Key를 입력해주세요.")
